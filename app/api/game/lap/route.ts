@@ -1,3 +1,7 @@
+export const runtime = "nodejs";
+export const maxDuration = 30;
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { recordPlayerLap } from "@/lib/db";
 export async function POST(request: NextRequest) {

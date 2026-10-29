@@ -10,7 +10,7 @@ Dark-mode organizer dashboard for student/RFID/walk-in registration, reversible 
 4. Run `npm run import:contacts` to upsert the directory. The supplied 9,934 source rows contain 9,933 unique roll numbers. Re-importing does not duplicate students.
 5. Run `npm run dev`, or `npm run build` followed by `npm start`. Open http://127.0.0.1:3000.
 
-MongoDB is required for durable event data. With no database configured, the fallback session only lasts for the current process. When MongoDB is configured but unavailable, race mutations fail rather than claiming that timings were saved.
+MongoDB is required for durable event data. During local development only, with no database configured, the fallback session only lasts for the current process. Hosted deployments require MongoDB. When MongoDB is configured but unavailable, race mutations fail rather than claiming that timings were saved.
 
 ## Registration
 
@@ -20,7 +20,7 @@ MongoDB is required for durable event data. With no database configured, the fal
 
 The physical reader must provide its UID over HTTP (directly or through the team's existing reader service); reading USB/serial hardware is not implemented in the web browser. Pair real cards using the actual reader's UID format before the event.
 
-If `INTEGRATION_TOKEN` is set, RFID scans and telemetry require `Authorization: Bearer <token>`. Keep the token on the reader/bridge server, not in browser code. The browser RFID test tool is intended for local development without this token. Full organizer sign-in is separate deployment work.
+If `INTEGRATION_TOKEN` is set, RFID scans and telemetry require `Authorization: Bearer <token>`. Keep the token on the reader/bridge server, not in browser code. The browser RFID API tester uses the separate RFID_API_KEY header described below. Full organizer sign-in is separate deployment work.
 
 ## Prepare and run a race
 
@@ -85,6 +85,7 @@ All arena mutations use MongoDB transactions. The session helper attaches the tr
 
 - `npx tsc --noEmit` — type checks.
 - `npm run build` — production build.
+- `npm run test:rfid-contract` — primary/fallback RFID handler contract tests with a simulated database; no Atlas connection required.
 - `npm run test:laps` — isolated MongoDB tests for UID pairing, scan deduplication, every player's laps, automatic stops, pause/resume, bad/duplicate/stale event rejection, failed-write rollback, restart recovery and synthetic WebSocket tracker integration.
 - `BROWSER_QA=1 npm run test:walk-ins` — existing registration/editing/queue tests plus desktop/mobile browser checks, dark mode and manual lap completion. Requires Google Chrome on macOS.
 - `npm run test:registration` — earlier smoke checks against an empty running local session.
@@ -98,3 +99,58 @@ The two isolated suites launch a separate local server on port 3101, use uniquel
 - Start the tracker/bridge before racing, synchronize clocks, test a complete multi-player race, and rehearse dropped frames, network loss, pause/recovery and manual fallback.
 - Put the website on a reliable event host, configure HTTPS/admin authentication and integration tokens, Atlas network access, backups, and stable power/network connectivity.
 - Confirm official lap targets, penalties, interrupted-race rules, and daily/overall standings. Separate two-day championship rules and power-ups remain outside this timing implementation.
+
+## Embedded-team RFID API contract
+
+Primary: `POST /api/arcade/scan`
+
+Identical fallback: `POST /api/rfid/scan`
+
+Headers:
+
+```text
+Content-Type: application/json
+x-api-key: <RFID_API_KEY from the server environment>
+```
+
+The new hardware endpoints require `RFID_API_KEY`; they return 503 if it is not configured and 401 for missing/incorrect keys. Add the same environment variable in Vercel or another hosting provider when deploying. The local environment is configured with the key supplied in the reference specification. Secrets are not returned by the public metadata route or API details panel.
+
+Payload examples (send one identifier):
+
+```json
+{ "rollNumber": "23CEB0B10" }
+```
+
+`rollNo` is an equivalent resolved-roll field. `rfid` accepts either a paired card UID or a resolved student roll number. `uid` strictly requires a saved card pairing. All successful scans use the same RFID registration queue; scanning through the fallback cannot duplicate an existing entry.
+
+Responses: 201 registered (student details, queue position and total waiting); 409 already queued/active or registration rejected; 400 invalid JSON/identifier; 401 invalid key; 422 unknown/unpaired card; 503 unavailable configuration or database. OPTIONS preflight supports Content-Type and x-api-key. GET on either alias returns non-secret contract metadata and does not register anyone.
+
+Open **Endpoint information** in the top navigation (or visit `/endpoints`) for auto-detected host/endpoint URLs, copy controls, a cURL template and an authenticated live tester. The tester asks the organizer to enter the key; it never fetches or embeds the server secret. Physical devices must use the deployed domain or the event server's reachable LAN IP. `127.0.0.1` on an ESP32 refers to the ESP32, not the laptop.
+
+The existing `/api/webhook/rfid` remains compatible with previous optional Bearer-token integrations and also accepts x-api-key. The new primary/fallback paths always require x-api-key.
+
+## Deploy the Next.js application to Vercel
+
+The website and every backend endpoint are implemented in the Next.js App Router (`app/` and `app/api/`). No Express server, Python web server, or separate API deployment is needed. `vercel.json` selects Next.js and the Mumbai function region; `package.json` selects Node.js 24. All database route handlers use the Node.js runtime with a 30-second request duration.
+
+1. Import this GitHub repository as a Vercel project. Select **Next.js**, repository root `.`, and keep the detected install/build/output settings. Vercel runs the existing `npm run build`.
+Push the updated code before importing or redeploying the project.
+
+2. Set environment variables for Production and any Preview environments you use:
+   - `MONGODB_URI`: the Atlas connection string.
+   - `MONGODB_DB_NAME`: `sk-leaderboard` for the existing data. Use a separate database for preview/test deployments to avoid editing the live event.
+   - `RFID_API_KEY`: the key shared with the embedded team.
+   - `INTEGRATION_TOKEN`: the server-to-server tracker token, if enabled.
+   - Optional `MONGODB_MAX_POOL_SIZE`: defaults to 10 per worker.
+3. Ensure Atlas Network Access permits the deployed Vercel application's outbound connections. The laptop's allowed IP does not automatically authorize Vercel.
+4. Deploy. Open `/api/health`: HTTP 200 with `database: connected` confirms database readiness. A missing/unavailable database returns HTTP 503. Do not use an in-memory demo store for an event deployment.
+5. Give the embedded team `https://YOUR_DOMAIN/api/arcade/scan` (fallback `/api/rfid/scan`) plus the configured API key. The API details panel automatically uses the deployed domain.
+6. For tracking, run the optional local bridge with `npm run tracker:bridge -- --origin https://YOUR_DOMAIN` and provide the same integration token to the bridge process. The camera/serial reader stays on the physical event computer; it sends HTTP events to the deployed Next.js APIs. The bridge is a local device adapter, not a second hosted web backend.
+
+Imported contacts are already in MongoDB. Vercel runtime code never needs the private local `contacts.json`, a local filesystem write, or a permanently running timer process. `.vercelignore` excludes contact input files, local environment files, tests and hardware/import utilities from deployment uploads. Next.js output tracing excludes them from API function dependencies too.
+
+Race clocks use saved timestamps; race and lap state loads from MongoDB on every mutation. Database transactions protect shared state across Vercel workers; process-global values are connection caches and local request coordination, not the source of persistent race data. Database failures do not become successful in-memory writes, and failed connection attempts can retry on a later request. `npm run test:vercel:smoke` runs the production server in simulated Vercel mode without local contacts or database credentials and verifies clear configuration errors. Run it after building. `npm run test:vercel` checks independent-worker recovery and absence of local contacts dependencies using a simulated MongoDB backend; the real-database suites are still required for live integration verification.
+
+This prepares the repository for deployment; it does not create a Vercel project, publish a deployment, or configure organizer authentication. Those require the hosting/account setup described above.
+
+The header reports **Database unavailable** after a failed connection rather than staying on Connecting. Refreshes do not overlap, connection requests have a timeout, and **Retry connection** retries without clearing the last displayed race state. `npm run test:connection-status` checks slow failure and recovery in Chrome against the running preview using intercepted responses; it does not change database records.

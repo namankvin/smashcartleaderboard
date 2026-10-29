@@ -10,11 +10,13 @@ assert.ok(process.env.MONGODB_URI, "Configure MongoDB before running these tests
 const database = `laps_test_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
 const client = new MongoClient(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 15000 });
 const integrationToken = "isolated-test-integration-token";
+const rfidApiKey = "isolated-rfid-api-key";
 const origin = "http://127.0.0.1:3101";
 let server;
+let databaseConnected = false;
 async function start() {
   server = spawn(process.execPath, ["node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", "3101"], {
-    env: { ...process.env, MONGODB_DB_NAME: database, INTEGRATION_TOKEN: integrationToken }, stdio: "ignore",
+    env: { ...process.env, MONGODB_DB_NAME: database, INTEGRATION_TOKEN: integrationToken, RFID_API_KEY: rfidApiKey }, stdio: "ignore",
   });
   for (let i = 0; i < 60; i++) {
     if (server.exitCode !== null) throw new Error("Isolated test server could not start; ensure port 3101 is free.");
@@ -35,7 +37,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 let bridge;
 let tracker;
 try {
-  await client.connect(); await start();
+  await client.connect(); databaseConnected = true; await start();
   assert.equal((await request("/api/students", "POST", { rollNo: "SCAN001", name: "RFID Student", email: "scan@example.com" })).success, true);
   assert.equal((await request("/api/rfid/cards", "POST", { uid: "TEST-CARD", rollNo: "UNKNOWN" })).success, false);
   assert.equal((await request("/api/rfid/cards", "POST", { uid: "TEST-CARD", rollNo: "SCAN001" })).success, true);
@@ -45,6 +47,34 @@ try {
   assert.equal((await request("/api/webhook/rfid", "POST", { uid: "test-card" })).success, false);
   assert.equal((await fetch(origin + "/api/webhook/rfid", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ uid: "test-card" }) })).status, 401);
   await request(`/api/queue?id=${scan.item.id}`, "DELETE");
+  const hardwareScan = async (path, payload, key = rfidApiKey) => {
+    const response = await fetch(origin + path, { method: "POST", headers: { "Content-Type": "application/json", ...(key ? { "x-api-key": key } : {}) }, body: JSON.stringify(payload) });
+    return { status: response.status, ...await response.json() };
+  };
+  for (const endpoint of ["/api/arcade/scan", "/api/rfid/scan"]) {
+    assert.equal((await hardwareScan(endpoint, { rollNumber: "SCAN001" }, "")).status, 401);
+    assert.equal((await hardwareScan(endpoint, { rollNumber: "SCAN001" }, "wrong")).status, 401);
+    assert.equal((await hardwareScan(endpoint, {})).status, 400);
+    assert.equal((await hardwareScan(endpoint, { rollNumber: 42 })).status, 400);
+    assert.equal((await hardwareScan(endpoint, null)).status, 400);
+    assert.equal((await hardwareScan(endpoint, { uid: "UNPAIRED" })).status, 422);
+    const malformed = await fetch(origin + endpoint, { method: "POST", headers: { "x-api-key": rfidApiKey, "Content-Type": "application/json" }, body: "{" });
+    assert.equal(malformed.status, 400);
+    const options = await fetch(origin + endpoint, { method: "OPTIONS", headers: { Origin: "https://reader.example", "Access-Control-Request-Headers": "x-api-key,content-type" } });
+    assert.equal(options.status, 204); assert.ok(options.headers.get("access-control-allow-headers").includes("x-api-key"));
+    const spec = await (await fetch(origin + endpoint)).json();
+    assert.equal(spec.endpoint, "/api/arcade/scan");
+    assert.ok(!JSON.stringify(spec).includes(rfidApiKey), "Public specifications never reveal the key");
+    for (const payload of [{ rollNumber: " scan001 " }, { rollNo: "SCAN001" }, { rfid: "SCAN001" }, { rfid: "test-card" }, { uid: "test-card" }]) {
+      const registration = await hardwareScan(endpoint, payload);
+      assert.equal(registration.status, 201, JSON.stringify(registration));
+      assert.equal(registration.student.name, "RFID Student"); assert.equal(registration.queuePosition, 1);
+      const duplicate = await hardwareScan(endpoint === "/api/arcade/scan" ? "/api/rfid/scan" : "/api/arcade/scan", { rollNo: "SCAN001" });
+      assert.equal(duplicate.status, 409);
+      assert.equal((await request("/api/queue")).queue.length, 1);
+      await request(`/api/queue?id=${registration.item.id}`, "DELETE");
+    }
+  }
   const guests = [];
   for (const name of ["Lap Racer A", "Lap Racer B", "Lap Racer C"]) guests.push((await request("/api/walk-ins", "POST", { name, email: "lap@example.com", phone: "12345", extras: "Test profile" })).profile);
   const queue = (await request("/api/queue")).queue;
@@ -102,7 +132,7 @@ try {
   const nextQueue = (await request("/api/queue")).queue;
   await request("/api/game/start-next", "POST", { queueIds: nextQueue.map(item => item.id) });
   await request("/api/game/settings", "POST", { targetLaps: 1 });
-  bridge = spawn(process.execPath, ["scripts/tracker-bridge.mjs", "--origin", origin, "--port", "8189"], { env: { ...process.env, INTEGRATION_TOKEN: integrationToken }, stdio: "ignore" });
+  bridge = spawn(process.execPath, ["scripts/tracker-bridge.mjs", "--origin", origin, "--port", "8189"], { env: { ...process.env, INTEGRATION_TOKEN: integrationToken, RFID_API_KEY: rfidApiKey }, stdio: "ignore" });
   for (let attempt = 0; attempt < 100; attempt++) { try { await fetch("http://127.0.0.1:8189"); break; } catch { await pause(100); } }
   tracker = new WebSocket("ws://127.0.0.1:8189");
   await new Promise((resolve, reject) => { tracker.addEventListener("open", resolve, { once: true }); tracker.addEventListener("error", reject, { once: true }); });
@@ -111,11 +141,11 @@ try {
   for (const car of ["Car 1 Red", "Car 2 Blue", "Car 3 Green"]) tracker.send(JSON.stringify({ car, lap: 11, timestamp: Date.now() / 1000, status: "VISIBLE", in_tunnel: false }));
   for (let attempt = 0; attempt < 60; attempt++) { game = await request("/api/game"); if (game.players.every(player => player.status === "finished")) break; await pause(150); }
   assert.ok(game.players.every(player => player.laps.length === 1 && player.status === "finished"), "Tracker bridge stops all three players at the configured lap target");
-  console.log("PASS: RFID UID pairing/scans, per-player manual/tracker laps, automatic finish, idempotency, invalid event rejection, transactional lap saving, restart recovery, participant snapshots, all-player results, and live WebSocket bridge.");
+  console.log("PASS: embedded RFID primary/fallback endpoints, x-api-key authentication, payload aliases, CORS, RFID UID pairing/scans, per-player manual/tracker laps, automatic finish, idempotency, invalid event rejection, transactional lap saving, restart recovery, participant snapshots, all-player results, and live WebSocket bridge.");
 } finally {
   tracker?.close();
   if (bridge && bridge.exitCode === null) { const exited = once(bridge, "exit"); bridge.kill("SIGTERM"); await exited; }
   await stop();
-  if (database.startsWith("laps_test_")) await client.db(database).dropDatabase();
+  if (databaseConnected && database.startsWith("laps_test_")) await client.db(database).dropDatabase();
   await client.close();
 }

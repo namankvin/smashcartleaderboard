@@ -32,10 +32,11 @@ declare global {
 
 // In-Memory Fallback Store (for immediate testing without MongoDB)
 function getMockStore() {
+  if (requiresMongo && !isMongoConfigured) throw new Error("MONGODB_URI must be configured for hosted deployments.");
   if (!globalThis._roboStore || globalThis._roboStoreVersion !== 2) {
     globalThis._roboStoreVersion = 2;
     globalThis._roboStore = {
-      students: [...getContacts()],
+      students: isMongoConfigured ? [] : [...getContacts()],
       queue: [],
       activePlayers: [],
       roundNumber: 1,
@@ -51,19 +52,30 @@ function getMockStore() {
 
 const uri = process.env.MONGODB_URI;
 const isMongoConfigured = Boolean(uri && uri.trim().startsWith("mongodb"));
+const requiresMongo = process.env.VERCEL === "1" || process.env.REQUIRE_MONGODB === "true";
 
 async function getMongoDb(): Promise<Db | null> {
-  if (!isMongoConfigured || !uri) return null;
-  try {
-    // Open the connection only when a request needs it, rather than during builds.
-    if (!globalThis._mongoClientPromise) {
-      globalThis._mongoClientPromise = new MongoClient(uri).connect();
-    }
-    const client = await globalThis._mongoClientPromise;
-    return databaseInTransaction(client.db(process.env.MONGODB_DB_NAME || "robotics_db"));
-  } catch (err) {
-    console.warn("MongoDB connection failed, falling back to mock database:", err);
+  if (!isMongoConfigured || !uri) {
+    if (requiresMongo) throw new Error("MONGODB_URI must be configured for hosted deployments.");
     return null;
+  }
+  if (!globalThis._mongoClientPromise) {
+    const poolSetting = Number(process.env.MONGODB_MAX_POOL_SIZE || 10);
+    const maxPoolSize = Number.isInteger(poolSetting) && poolSetting >= 1 && poolSetting <= 50 ? poolSetting : 10;
+    const client = new MongoClient(uri, { maxPoolSize, minPoolSize: 0, maxIdleTimeMS: 60000, serverSelectionTimeoutMS: 8000, connectTimeoutMS: 8000, waitQueueTimeoutMS: 8000 });
+    globalThis._mongoClientPromise = client.connect().catch(async error => {
+      await client.close().catch(() => undefined);
+      throw error;
+    });
+  }
+  const pending = globalThis._mongoClientPromise;
+  try {
+    const client = await pending;
+    return databaseInTransaction(client.db(process.env.MONGODB_DB_NAME || "robotics_db"));
+  } catch {
+    // A transient outage must not leave a rejected promise cached for this worker.
+    if (globalThis._mongoClientPromise === pending) globalThis._mongoClientPromise = undefined;
+    throw new Error("MongoDB is unavailable. Check Atlas network access and connection settings, then retry.");
   }
 }
 
@@ -83,7 +95,8 @@ export async function getDbStatus(): Promise<DbStatus> {
         totalInQueue: queueCount,
         activeRound: (await readArenaState()).roundNumber || 1,
       };
-    } catch {
+    } catch (error) {
+      if (isMongoConfigured) throw error;
       // Fall through to mock
     }
   }
@@ -112,6 +125,7 @@ export async function getAllStudents(search?: string): Promise<Student[]> {
       const docs = await db.collection<Student>("students").find(filter).toArray();
       return docs;
     } catch (err) {
+      if (isMongoConfigured) throw err;
       console.warn("Mongo query failed, using mock", err);
     }
   }
@@ -141,6 +155,7 @@ export async function findStudentByRollNo(rollNo: string): Promise<Student | nul
       });
       return student;
     } catch (err) {
+      if (isMongoConfigured) throw err;
       console.warn("Mongo find student failed, using mock", err);
     }
   }
@@ -169,6 +184,7 @@ export async function insertStudent(student: Student): Promise<Student> {
       );
       return cleanStudent;
     } catch (err) {
+      if (isMongoConfigured) throw err;
       console.warn("Mongo insert student failed, saving in mock", err);
     }
   }
@@ -209,6 +225,7 @@ export async function getQueue(): Promise<QueueItem[]> {
         .toArray();
       return hydrateWalkInNames(queue);
     } catch (err) {
+      if (isMongoConfigured) throw err;
       console.warn("Mongo get queue failed, using mock", err);
     }
   }
@@ -291,6 +308,7 @@ async function addToQueueByRollNoUnlocked(
         isNewStudent: isNew,
       };
     } catch (err) {
+      if (isMongoConfigured) throw err;
       console.warn("Mongo insert queue failed, using mock", err);
     }
   }
@@ -317,6 +335,7 @@ async function removeFromQueueUnlocked(idOrRoll: string): Promise<boolean> {
       store.queue = store.queue.filter(q => q.id !== idOrRoll && q.rollNo !== clean);
       return result.deletedCount > 0;
     } catch (err) {
+      if (isMongoConfigured) throw err;
       console.warn("Mongo remove queue failed", err);
     }
   }
@@ -828,7 +847,8 @@ export async function getLeaderboardData(searchRollNo?: string): Promise<{
       if (docs.length > 0) {
         historyRounds = docs;
       }
-    } catch {
+    } catch (error) {
+      if (isMongoConfigured) throw error;
       // Use mock store
     }
   }
@@ -968,7 +988,7 @@ function serializeMutation<T>(operation: () => Promise<T>): Promise<T> {
         await savePlayerResults(getMockStore().activePlayers);
         await db.collection<{ _id: string; state: ArenaState }>("arena_state").replaceOne({ _id: "current" }, { state: arenaState() }, { upsert: true, session });
         return value;
-      })));
+      }), { timeoutMS: 20000, maxCommitTimeMS: 5000 }));
     } catch (error) { Object.assign(getMockStore(), before); throw error; }
   });
   globalThis._registrationMutation = result.catch(() => undefined);

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { Student } from "./types";
 
@@ -7,6 +7,7 @@ let contacts: Student[] | undefined;
 export function getContacts(): Student[] {
   if (contacts) return contacts;
   const file = process.env.CONTACTS_FILE || path.join(process.cwd(), "data", "contacts.json");
+  if (!existsSync(file) && !process.env.CONTACTS_FILE) return contacts = [];
   const records: unknown = JSON.parse(readFileSync(file, "utf8"));
   if (!Array.isArray(records)) throw new Error("contacts.json must contain an array.");
   const byRoll = new Map<string, Student>();

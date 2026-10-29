@@ -83,6 +83,18 @@ export async function verifyInterface(origin) {
     await waitFor(`!document.querySelector('[role="dialog"]') && document.querySelector('#queue').innerText.includes('UI Remove Guest') && document.querySelector('.profile-list').innerText.includes('UI Remove Guest')`);
     await evaluate(`(() => { window.confirm = () => true; document.querySelector('button[aria-label="Remove UI Remove Guest from waiting queue"]').click(); })()`);
     await waitFor(`!document.querySelector('#queue').innerText.includes('UI Remove Guest') && !document.querySelector('.profile-list').innerText.includes('UI Remove Guest')`);
+    await evaluate(`document.querySelector('.tools-panel').open = true`);
+    await clickText("RFID API details & test");
+    await waitFor(`document.querySelector('#rfid-title')?.textContent === 'Embedded team RFID API'`);
+    assert.equal(await evaluate(`document.querySelector('[role="dialog"]').innerText.includes(${JSON.stringify(origin + "/api/arcade/scan")})`), true);
+    assert.equal(await evaluate(`document.querySelector('[role="dialog"]').innerText.includes(${JSON.stringify(origin + "/api/rfid/scan")})`), true);
+    await evaluate(`(() => { const inputs = document.querySelectorAll('[role="dialog"] input'); for (const [index,value] of ['TEST-STUDENT', 'browser-test-rfid-key'].entries()) { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(inputs[index], value); inputs[index].dispatchEvent(new Event('input', { bubbles: true })); } })()`);
+    await clickText("Send test registration");
+    await waitFor(`Array.from(document.querySelectorAll('[role="dialog"] pre[role="status"]')).some(item => item.textContent.includes('"success": true'))`);
+    await clickText("Close");
+    await clickText("RFID API details & test");
+    assert.equal(await evaluate(`document.querySelector('[role="dialog"] input[type="password"]').value`), "", "Tester clears the entered key when closed");
+    await clickText("Close");
     console.log("PASS: desktop/mobile browser flow for walk-in registration, queue assignment, return with preserved position, moving tracks, editing a profile during a running race, and immediate profile removal from the walk-in table.");
   } finally {
     socket?.close(); chrome.kill("SIGTERM");

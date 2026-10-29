@@ -1,3 +1,6 @@
+export const runtime = "nodejs";
+export const maxDuration = 30;
+
 import { NextRequest, NextResponse } from "next/server";
 import { listRFIDCards, pairRFIDCard } from "@/lib/db";
 export const dynamic = "force-dynamic";

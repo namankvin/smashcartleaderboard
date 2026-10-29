@@ -11,9 +11,10 @@ const database = `walkin_test_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
 const client = new MongoClient(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 15000 });
 const origin = "http://127.0.0.1:3101";
 let server;
+let databaseConnected = false;
 async function start() {
   server = spawn(process.execPath, ["node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", "3101"], {
-    env: { ...process.env, MONGODB_DB_NAME: database }, stdio: "ignore",
+    env: { ...process.env, MONGODB_DB_NAME: database, RFID_API_KEY: "browser-test-rfid-key" }, stdio: "ignore",
   });
   for (let i = 0; i < 60; i++) {
     if (server.exitCode !== null) throw new Error("Isolated test server could not start; ensure port 3101 is free.");
@@ -31,7 +32,7 @@ async function request(path, method = "GET", body) {
 }
 const edit = (id, fields) => request(`/api/walk-ins/${id}`, "PATCH", fields);
 try {
-  await client.connect();
+  await client.connect(); databaseConnected = true;
   await start();
   assert.equal((await request("/api/walk-ins", "POST", { name: "  " })).status, 400);
   const first = await request("/api/walk-ins", "POST", { name: "Walk-in Test", phone: "+91 000 000", extras: "Initial notes" });
@@ -143,6 +144,6 @@ try {
   console.log("PASS: deletion of unplayed walk-ins, preservation of recorded guests and students, reversible assignment, original queue order/identity, track moves/swaps, failed-return safety, race locking, name-only registration, distinct walk-in IDs, shared queue, validation, before/during/after-race edits, cleared optional fields, unchanged timers/results, updated leaderboard, and MongoDB persistence after restart.");
 } finally {
   await stop();
-  if (database.startsWith("walkin_test_")) await client.db(database).dropDatabase();
+  if (databaseConnected && database.startsWith("walkin_test_")) await client.db(database).dropDatabase();
   await client.close();
 }
