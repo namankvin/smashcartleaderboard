@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Add to queue (automatically looks up name/details from Database)
-    const result = await addToQueueByRollNo(rollNo, studentName);
+    const result = await addToQueueByRollNo(rollNo, studentName, "webhook");
     const queue = await getQueue();
     const position = queue.findIndex((q) => q.rollNo.toUpperCase() === rollNo.trim().toUpperCase()) + 1;
 
@@ -102,7 +102,7 @@ export async function GET(request: NextRequest) {
     }, { headers: corsHeaders });
   }
 
-  const result = await addToQueueByRollNo(rollNo);
+  const result = await addToQueueByRollNo(rollNo, undefined, "webhook");
   const queue = await getQueue();
   const position = queue.findIndex((q) => q.rollNo.toUpperCase() === rollNo.trim().toUpperCase()) + 1;
 

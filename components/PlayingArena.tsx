@@ -1,250 +1,41 @@
 "use client";
+import { useEffect, useState } from "react";
+import { ActivePlayer, QueueItem } from "@/lib/types";
+import { WalkInEditButton } from "./WalkInRegistration";
+import { ArrowLeft, Play, Square, ArrowLeftRight } from "lucide-react";
 
-import React, { useState } from "react";
-import { ActivePlayer, QueueItem, WithdrawnRecord } from "@/lib/types";
-import { StopwatchCard } from "./StopwatchCard";
-import {
-  Play,
-  Square,
-  RotateCcw,
-  Trophy,
-  Crosshair,
-  ShieldAlert,
-  UserX,
-  CheckCircle,
-  AlertTriangle,
-} from "lucide-react";
-import { soundFx } from "@/lib/sound";
-
-interface PlayingArenaProps {
-  activePlayers: ActivePlayer[];
-  roundNumber: number;
-  waitingQueue: QueueItem[];
-  withdrawnList: WithdrawnRecord[];
-  onMasterAction: (action: "start_all" | "stop_all" | "reset_all") => Promise<void>;
-  onIndividualAction: (
-    slot: number,
-    action: "start" | "stop" | "reset" | "penalty" | "disqualify",
-    extra?: { penalty?: number }
-  ) => Promise<void>;
-  onFinishRound: () => Promise<void>;
-  onVacateSlot: (
-    slot: number,
-    options: { reason: string; barFromNextRound: boolean; sendToQueue: boolean }
-  ) => Promise<void>;
-  onAssignSlot: (slot: number, rollNo: string) => Promise<void>;
-  onEditSlot: (
-    slot: number,
-    data: { name: string; teamName: string; rollNo: string; department?: string }
-  ) => Promise<void>;
-  onUnbarContestant: (rollNo: string) => Promise<void>;
+const colors = ["#dc6270", "#568bd9", "#30a47b"];
+const carNames = ["Red car", "Blue car", "Green car"];
+function time(ms: number) { const value = Math.max(0, ms); return `${String(Math.floor(value / 60000)).padStart(2, "0")}:${String(Math.floor(value / 1000) % 60).padStart(2, "0")}.${String(Math.floor(value % 1000)).padStart(3, "0")}`; }
+function Timer({ player }: { player: ActivePlayer }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { if (!player.isRunning) return; const interval = setInterval(() => setNow(Date.now()), 37); return () => clearInterval(interval); }, [player.isRunning]);
+  return <div className="timer" aria-label={`Time for ${player.name}`}>{time(player.accumulatedMs + (player.isRunning && player.startTime ? Math.max(0, now - player.startTime) : 0) + (player.penaltySeconds || 0) * 1000)}</div>;
 }
-
-export const PlayingArena: React.FC<PlayingArenaProps> = ({
-  activePlayers,
-  roundNumber,
-  waitingQueue,
-  withdrawnList,
-  onMasterAction,
-  onIndividualAction,
-  onFinishRound,
-  onVacateSlot,
-  onAssignSlot,
-  onEditSlot,
-  onUnbarContestant,
-}) => {
-  const [submitting, setSubmitting] = useState(false);
-
-  const activeNonVacant = activePlayers.filter((p) => !p.isVacant);
-  const anyRunning = activeNonVacant.some((p) => p.isRunning);
-  const allFinishedOrStopped =
-    activeNonVacant.length > 0 &&
-    activeNonVacant.every(
-      (p) =>
-        p.status === "finished" ||
-        p.status === "disqualified" ||
-        (!p.isRunning && p.accumulatedMs > 0)
-    );
-
-  const handleMasterStart = async () => {
-    soundFx.playStartBuzzer();
-    await onMasterAction("start_all");
-  };
-
-  const handleMasterStop = async () => {
-    soundFx.playStopChime();
-    await onMasterAction("stop_all");
-  };
-
-  const handleMasterReset = async () => {
-    soundFx.playBlip();
-    await onMasterAction("reset_all");
-  };
-
-  const handleFinishRound = async () => {
-    setSubmitting(true);
-    soundFx.playVictoryFanfare();
-    try {
-      await onFinishRound();
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  // Ensure always 3 slots for visual matrix
-  const displaySlots: ActivePlayer[] = [1, 2, 3].map((slotNum) => {
-    const found = activePlayers.find((p) => p.slot === slotNum);
-    return (
-      found || {
-        slot: slotNum,
-        rollNo: "",
-        name: "Vacant Slot",
-        teamName: "Standby",
-        department: "",
-        startTime: null,
-        stopTime: null,
-        accumulatedMs: 0,
-        isRunning: false,
-        status: "vacant",
-        isVacant: true,
-      }
-    );
-  });
-
-  return (
-    <div className="bg-[#0b1222]/95 rounded-2xl border border-cyan-500/40 p-6 shadow-2xl relative tech-frame">
-      
-      {/* Arena Banner Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between pb-4 mb-5 border-b border-cyan-900/50 gap-4">
-        <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-gradient-to-br from-cyan-500/20 to-teal-500/20 border border-cyan-500/40 text-cyan-400">
-            <Crosshair className="w-6 h-6 animate-spin-slow" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-lg font-black uppercase tracking-wider text-cyan-300 font-mono">
-                ARENA COMBAT ZONE // 3-ROBOT ACTIVE SLOTS
-              </h2>
-              <span className="px-2 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 font-mono text-xs font-bold">
-                Round #{roundNumber}
-              </span>
-              <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
-                {activeNonVacant.length} / 3 Seated
-              </span>
-            </div>
-            <p className="text-xs text-slate-400 font-mono">
-              Individual & Master Stopwatch Controls • Seat Vacating & Swapping Supported
-            </p>
-          </div>
-        </div>
-
-        {/* Master Stopwatches Controls Bar */}
-        <div className="flex items-center flex-wrap gap-2">
-          {/* Master Start All */}
-          <button
-            onClick={handleMasterStart}
-            disabled={activeNonVacant.length === 0 || anyRunning}
-            className="px-4 py-2.5 rounded-lg font-mono text-xs font-black uppercase tracking-wider bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-800 text-slate-950 disabled:text-slate-600 flex items-center gap-2 shadow-green-glow transition-all cursor-pointer disabled:cursor-not-allowed"
-          >
-            <Play className="w-4 h-4 fill-current" />
-            <span>START ALL TIMERS</span>
-          </button>
-
-          {/* Master Stop All */}
-          <button
-            onClick={handleMasterStop}
-            disabled={activeNonVacant.length === 0 || !anyRunning}
-            className="px-4 py-2.5 rounded-lg font-mono text-xs font-black uppercase tracking-wider bg-rose-500 hover:bg-rose-400 disabled:bg-slate-800 text-slate-950 disabled:text-slate-600 flex items-center gap-2 shadow-rose-glow transition-all cursor-pointer disabled:cursor-not-allowed"
-          >
-            <Square className="w-4 h-4 fill-current" />
-            <span>STOP ALL TIMERS</span>
-          </button>
-
-          {/* Master Reset All */}
-          <button
-            onClick={handleMasterReset}
-            disabled={activeNonVacant.length === 0}
-            className="px-3 py-2.5 rounded-lg font-mono text-xs font-bold uppercase tracking-wider bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900 text-slate-300 disabled:text-slate-700 border border-slate-700 flex items-center gap-1.5 transition-all cursor-pointer disabled:cursor-not-allowed"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span>RESET ALL</span>
-          </button>
-
-          {/* Finish & Record Round */}
-          {activeNonVacant.length > 0 && (
-            <button
-              onClick={handleFinishRound}
-              disabled={submitting}
-              className={`px-4 py-2.5 rounded-lg font-mono text-xs font-black uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
-                allFinishedOrStopped
-                  ? "bg-gradient-to-r from-amber-400 to-yellow-500 text-slate-950 shadow-amber-glow animate-pulse"
-                  : "bg-cyan-950 hover:bg-cyan-900 text-cyan-300 border border-cyan-500/40"
-              }`}
-            >
-              <Trophy className="w-4 h-4" />
-              <span>{submitting ? "RECORDING..." : "SAVE & END ROUND"}</span>
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* 3 Robot Slots Grid (Always 3 fixed slots) */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-        {displaySlots.map((player) => (
-          <StopwatchCard
-            key={player.slot}
-            player={player}
-            waitingQueue={waitingQueue}
-            onIndividualAction={onIndividualAction}
-            onVacateSlot={onVacateSlot}
-            onAssignSlot={onAssignSlot}
-            onEditSlot={onEditSlot}
-          />
-        ))}
-      </div>
-
-      {/* Barred Contestants Banner (Changed mind / left arena) */}
-      {withdrawnList && withdrawnList.length > 0 && (
-        <div className="mt-5 p-3.5 rounded-xl bg-[#170a0e] border border-rose-500/50 text-xs font-mono">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-rose-300 font-bold uppercase flex items-center gap-1.5">
-              <ShieldAlert className="w-4 h-4 text-rose-400" />
-              Withdrawn Contestants (Changed Mind - Barred from Next Round)
-            </span>
-            <span className="text-[10px] text-slate-400">
-              Organizer Ineligibility List
-            </span>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-            {withdrawnList.map((w) => (
-              <div
-                key={w.rollNo}
-                className="p-2 rounded bg-rose-950/40 border border-rose-500/30 flex items-center justify-between"
-              >
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-bold text-rose-200">{w.name}</span>
-                    <span className="text-[10px] text-rose-300 font-mono px-1 rounded bg-black/40">
-                      {w.rollNo}
-                    </span>
-                  </div>
-                  <span className="text-[10px] text-slate-400 block mt-0.5">
-                    Left Lane #{w.slot} • Round #{w.roundNumber}
-                  </span>
-                </div>
-                <button
-                  onClick={() => onUnbarContestant(w.rollNo)}
-                  title="Remove ban and allow to play"
-                  className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold border border-slate-700 cursor-pointer"
-                >
-                  Unbar
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-    </div>
-  );
-};
+export function PlayingArena({ players, queue, round, raceStarted, busy, raceId, targetLaps, onAction }: {
+  raceId: string; targetLaps: number; players: ActivePlayer[]; queue: QueueItem[]; round: number; raceStarted: boolean; busy: boolean;
+  onAction: (path: string, body: Record<string, unknown>) => Promise<boolean>;
+}) {
+  const [editing, setEditing] = useState<{ slot: number; name: string; teamName: string } | null>(null);
+  const [picks, setPicks] = useState<Record<number, string>>({});
+  const occupied = players.filter(player => !player.isVacant);
+  const running = occupied.some(player => player.isRunning);
+  const slots = (action: string, extra = {}) => onAction("/api/game/slots", { action, ...extra });
+  const timer = (action: string, slot?: number) => onAction("/api/game/timer", { action, ...(slot ? { slot } : {}) });
+  return <section className="panel" id="tracks"><div className="panel-heading"><div><h2><span className="step-number">3</span>Track & race control</h2><p className="muted">{raceStarted ? "Track assignments are locked. Participant details can still be edited." : "Choose players, change tracks, or return anyone to the queue."}</p></div><span className={`badge ${running ? "badge-running" : ""}`}>{running ? "Race in progress" : raceStarted ? "Race stopped" : "Preparing round"} · {round}</span></div>
+    {!raceStarted && <div className="info-box">Nothing is final until the race starts. <strong>Return to queue</strong> restores a player’s original place. Moving to an occupied track swaps the two players.</div>}
+    <div className="lap-settings"><label className="form-label" htmlFor="lap-target">Laps per player</label><select className="field" id="lap-target" value={targetLaps} disabled={busy || raceStarted} onChange={e => onAction("/api/game/settings", { targetLaps: Number(e.target.value) })}>{Array.from({ length: 100 }, (_, i) => i + 1).map(value => <option key={value} value={value}>{value} {value === 1 ? "lap" : "laps"}</option>)}</select><span className="muted">Each lap saves automatically. Timers stop at the final lap.</span></div><div className="track-grid">{[1, 2, 3].map(slot => {
+      const player = players.find(item => item.slot === slot);
+      const vacant = !player || player.isVacant;
+      return <article key={slot} className="track-card" style={{ "--track-color": colors[slot - 1] } as React.CSSProperties}>
+        <div className="track-label"><span className="track-dot" />Track {slot}<span style={{ marginLeft: "auto" }}>{carNames[slot - 1]}</span></div>
+        {vacant ? <><div className="track-empty"><strong>Ready for a player</strong><span className="muted">Assign someone from the queue.</span></div><label className="form-label" htmlFor={`pick-${slot}`}>Waiting player</label><select id={`pick-${slot}`} className="field" disabled={busy || raceStarted || !queue.length} value={picks[slot] || ""} onChange={e => setPicks(current => ({ ...current, [slot]: e.target.value }))}><option value="">{queue.length ? "Choose a player…" : "No players waiting"}</option>{queue.map(item => <option key={item.id} value={item.rollNo}>{item.name} · {item.rollNo.startsWith("GUEST-") ? "Walk-in" : item.rollNo}</option>)}</select><button style={{ width: "100%", marginTop: 10 }} className="btn" disabled={busy || raceStarted || !queue.some(item => item.rollNo === picks[slot])} onClick={async () => { if (await slots("assign", { slot, rollNo: picks[slot] })) setPicks(current => ({ ...current, [slot]: "" })); }}>Assign to Track {slot}</button></> : <>
+          <div className="track-name">{player.name}</div><div className="person-meta">{player.rollNo.startsWith("GUEST-") ? "Walk-in participant" : player.rollNo}</div>{player.rollNo.startsWith("GUEST-") ? <WalkInEditButton id={player.rollNo} /> : <button className="link-button" disabled={busy} onClick={() => setEditing({ slot, name: player.name, teamName: player.teamName || "" })}>Edit details</button>}
+          {!raceStarted ? <div className="track-options"><button className="btn" disabled={busy} onClick={() => slots("vacate", { slot, sendToQueue: true })}><ArrowLeft size={14} />Return to queue</button><label className="form-label" htmlFor={`move-${slot}`}>Change track</label><select id={`move-${slot}`} aria-label={`Change track for ${player.name}`} className="field" value="" disabled={busy} onChange={e => slots("move", { slot, toSlot: Number(e.target.value) })}><option value="">Move or swap…</option>{[1, 2, 3].filter(target => target !== slot).map(target => <option key={target} value={target}>{players.some(p => p.slot === target && !p.isVacant) ? "Swap with" : "Move to"} Track {target} · {carNames[target - 1]}</option>)}</select></div> : <><Timer player={player} /><div className="button-row" style={{ justifyContent: "center", marginBottom: 12 }}><span className={`badge ${player.isRunning ? "badge-running" : ""}`}>{player.status === "running" ? "Running" : player.status === "disqualified" ? "Disqualified" : player.status === "finished" ? "Finished" : player.status === "stopped" ? "Paused" : "Ready"}</span>{Boolean(player.penaltySeconds) && <span className="badge badge-warn">+{player.penaltySeconds}s penalty</span>}</div><div className="lap-progress"><strong>{player.laps?.length || 0} / {targetLaps} laps</strong><span className="person-meta">{player.status === "finished" ? "All laps completed · saved" : "Recorded so far"}</span></div><ol className="lap-list">{(player.laps || []).map(lap => <li key={lap.lapNumber}><span>Lap {lap.lapNumber}</span><strong>{time(lap.lapTimeMs)}</strong></li>)}</ol><div className="track-options"><button className="btn btn-primary" disabled={busy || !player.isRunning} onClick={() => onAction("/api/game/lap", { raceId, slot, lapNumber: (player.laps?.length || 0) + 1, eventId: crypto.randomUUID() })}>{player.status === "finished" ? "Completed" : `Record lap ${(player.laps?.length || 0) + 1}`}</button><button className="btn btn-small" disabled={busy || !player.isRunning} onClick={() => timer("stop", slot)}><Square size={13} />Pause timer</button><button className="btn btn-small" disabled={busy || player.status === "disqualified"} onClick={() => onAction("/api/game/timer", { action: "penalty", slot, penaltySeconds: 5 })}>Add 5s penalty</button></div><details style={{ marginTop: 14 }}><summary className="muted" style={{ cursor: "pointer" }}>More race controls</summary><div className="track-options"><button className="btn btn-small" disabled={busy || player.isRunning || player.status === "disqualified" || player.status === "finished"} onClick={() => timer("start", slot)}>Resume timer</button><button className="btn btn-small btn-danger" disabled={busy || player.status === "disqualified"} onClick={() => { if (confirm(`Disqualify ${player.name}? Their result will be marked disqualified.`)) timer("disqualify", slot); }}>Disqualify player</button></div></details></>}
+        </>}
+      </article>;
+    })}</div>
+    <div className="race-toolbar"><div className="muted">{occupied.length}/3 tracks filled{!raceStarted && occupied.length > 0 && occupied.length < 3 ? " · You can start with fewer players." : ""}</div><div className="button-row">{!raceStarted ? <><button className="btn" disabled={busy || !occupied.length} onClick={() => slots("return_all")}><ArrowLeftRight size={15} />Return all to queue</button><button className="btn btn-primary" disabled={busy || !occupied.length} onClick={() => timer("start_all")}><Play size={15} />Start race</button></> : <><button className="btn btn-danger" disabled={busy || !running} onClick={() => timer("stop_all")}><Square size={14} />Pause all timers</button><button className="btn" disabled={busy || running || !occupied.some(player => player.status === "stopped" || player.status === "ready")} onClick={() => timer("start_all")}>Resume timers</button><button className="btn btn-primary" disabled={busy || running || !occupied.length } onClick={() => { if (occupied.every(player => player.status === "finished" || player.status === "disqualified") || confirm("Some players have not completed all laps. Save their existing laps and mark their results as Did not finish?")) onAction("/api/game/finish", {}); }}>Save results & next round</button></>}</div></div>
+    {editing && <div className="modal-backdrop" onKeyDown={e => { if (e.key === "Escape" && !busy) setEditing(null); if (e.key === "Tab") { const nodes = e.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled)'); const first = nodes[0], last = nodes[nodes.length - 1]; if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); } else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); } } }}><form className="modal-card" role="dialog" aria-modal="true" aria-labelledby="edit-student-title" onSubmit={async e => { e.preventDefault(); if (await slots("edit", editing)) setEditing(null); }}><h2 id="edit-student-title">Edit player details</h2><p className="muted">Their roll number, track and race time stay the same.</p><label className="form-label form-group">Name<input autoFocus className="field" required value={editing.name} onChange={e => setEditing(current => current && ({ ...current, name: e.target.value }))} /></label><label className="form-label form-group">Team (optional)<input className="field" value={editing.teamName} onChange={e => setEditing(current => current && ({ ...current, teamName: e.target.value }))} /></label><div className="button-row" style={{ marginTop: 18, justifyContent: "flex-end" }}><button type="button" className="btn" disabled={busy} onClick={() => setEditing(null)}>Cancel</button><button className="btn btn-primary" disabled={busy || !editing.name.trim()}>Save details</button></div></form></div>}
+  </section>;
+}

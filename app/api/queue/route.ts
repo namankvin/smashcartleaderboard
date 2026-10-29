@@ -1,5 +1,7 @@
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
-import { getQueue, addToQueueByRollNo, removeFromQueue, clearQueue } from "@/lib/db";
+import { getQueue, addToQueueByRollNo, removeWaitingParticipant, clearQueue } from "@/lib/db";
 
 // GET /api/queue - Fetch all waiting participants
 export async function GET() {
@@ -25,7 +27,7 @@ export async function POST(request: NextRequest) {
     const rollNo = body.rollNo || body.roll_no;
     const name = body.name;
 
-    if (!rollNo) {
+    if (typeof rollNo !== "string" || !rollNo.trim()) {
       return NextResponse.json(
         { success: false, message: "Field 'rollNo' is required." },
         { status: 400 }
@@ -64,11 +66,8 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    const removed = await removeFromQueue(id);
-    return NextResponse.json({
-      success: removed,
-      message: removed ? "Contestant removed from queue." : "Item not found in queue.",
-    });
+    const result = await removeWaitingParticipant(id);
+    return NextResponse.json(result, { status: result.success ? 200 : 404 });
   } catch (error) {
     return NextResponse.json(
       { success: false, error: (error as Error).message },

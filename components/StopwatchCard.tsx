@@ -17,6 +17,7 @@ import {
   X,
   Search,
 } from "lucide-react";
+import { WalkInEditButton } from "./WalkInRegistration";
 import { soundFx } from "@/lib/sound";
 
 interface StopwatchCardProps {
@@ -148,6 +149,8 @@ export const StopwatchCard: React.FC<StopwatchCardProps> = ({
     try {
       await onAssignSlot(player.slot, roll);
       setFillRollNo("");
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Could not assign this player.");
     } finally {
       setFillSearching(false);
     }
@@ -160,7 +163,7 @@ export const StopwatchCard: React.FC<StopwatchCardProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between border-b border-amber-900/40 pb-2.5 mb-3">
           <span className="px-2 py-0.5 rounded text-[11px] font-mono font-black tracking-widest bg-amber-500/20 text-amber-300 border border-amber-500/40">
-            LANE #{player.slot} [VACANT]
+            {player.carId || `Car ${player.slot}`} [VACANT]
           </span>
           <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-amber-400 bg-amber-950/60 px-2 py-0.5 rounded border border-amber-500/30 animate-pulse">
             Ready to Seat
@@ -175,7 +178,7 @@ export const StopwatchCard: React.FC<StopwatchCardProps> = ({
               SEAT VACANT // CHOOSE WHO TO PLAY NEXT
             </p>
             <p className="font-mono text-[11px] text-slate-400 mt-0.5">
-              Fill by searching roll number or pick from waiting list
+              Assign a registered player from the waiting queue
             </p>
           </div>
 
@@ -186,7 +189,7 @@ export const StopwatchCard: React.FC<StopwatchCardProps> = ({
               value={fillRollNo}
               onChange={(e) => setFillRollNo(e.target.value.toUpperCase())}
               onKeyDown={(e) => e.key === "Enter" && handleAssignSubmit()}
-              placeholder="Enter Roll No (e.g. 24ROB101)..."
+              placeholder="Queued roll number…"
               className="flex-1 bg-[#060a14] border border-amber-900/60 focus:border-amber-400 rounded-lg px-2.5 py-1.5 text-xs font-mono text-amber-200 uppercase outline-none"
             />
             <button
@@ -260,7 +263,7 @@ export const StopwatchCard: React.FC<StopwatchCardProps> = ({
                 : "bg-purple-500/20 text-purple-300 border border-purple-500/40"
             }`}
           >
-            LANE #{player.slot}
+            {player.carId || `Car ${player.slot}`}
           </span>
           <span className="text-xs font-mono font-bold text-slate-100 truncate max-w-[110px]">
             {player.name}
@@ -269,13 +272,13 @@ export const StopwatchCard: React.FC<StopwatchCardProps> = ({
 
         {/* Organizer Quick Actions (Edit, Withdraw / Leave) */}
         <div className="flex items-center gap-1.5">
-          <button
+          {player.rollNo.startsWith("GUEST-") ? <WalkInEditButton id={player.rollNo.startsWith("GUEST-") ? "Walk-in participant" : player.rollNo} /> : <button
             onClick={() => setIsEditing(!isEditing)}
             title="Edit player info"
             className="p-1 rounded text-slate-400 hover:text-cyan-300 hover:bg-slate-800 transition-colors cursor-pointer"
           >
             <Edit2 className="w-3.5 h-3.5" />
-          </button>
+          </button>}
 
           <button
             onClick={() => setShowWithdrawDialog(!showWithdrawDialog)}
@@ -416,7 +419,7 @@ export const StopwatchCard: React.FC<StopwatchCardProps> = ({
               {player.teamName || "Autonomous Robot"}
             </span>
             <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-slate-400">
-              {player.rollNo}
+              {player.rollNo.startsWith("GUEST-") ? "Walk-in participant" : player.rollNo}
             </span>
           </div>
           <p className="text-[10px] font-mono text-slate-500 truncate">

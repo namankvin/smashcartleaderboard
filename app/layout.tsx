@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "ROBO-ARENA // Competition Queue & Master Timer",
+  title: "SmashKart // Registration & Track Control",
   description:
-    "Next.js & MongoDB powered Robotics Competition management platform with live roll-no webhook, automated queueing, and multi-lane synchronized stopwatches.",
+    "SmashKart event control: register students and visitors, prepare three tracks and record race results.",
   keywords: ["robotics", "queue", "stopwatch", "mongodb", "nextjs", "competition"],
 };
 
@@ -14,8 +14,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
-      <body className="min-h-screen bg-[#080c14] text-slate-100 cyber-grid selection:bg-cyan-500 selection:text-black">
+    <html lang="en">
+      <body>
         {children}
       </body>
     </html>

@@ -6,6 +6,7 @@ export interface Student {
   department?: string;
   year?: string;
   contact?: string;
+  email?: string;
   registeredAt?: string;
 }
 
@@ -15,6 +16,7 @@ export interface QueueItem {
   name: string;
   teamName?: string;
   department?: string;
+  registrationSource?: "manual" | "rfid" | "webhook" | "walk-in";
   enqueuedAt: string;
   status: 'waiting' | 'ready' | 'playing' | 'completed';
 }
@@ -22,6 +24,10 @@ export interface QueueItem {
 export interface ActivePlayer {
   slot: number; // 1, 2, or 3
   queueId?: string;
+  carId?: string;
+  queueEntry?: QueueItem;
+  laps?: LapRecord[];
+  participant?: ParticipantSnapshot;
   rollNo: string;
   name: string;
   teamName?: string;
@@ -65,6 +71,9 @@ export interface MatchRound {
   id: string;
   roundNumber: number;
   completedAt: string;
+  raceId?: string;
+  targetLaps?: number;
+  startedAt?: number;
   players: {
     slot: number;
     rollNo: string;
@@ -74,6 +83,8 @@ export interface MatchRound {
     timeFormatted: string;
     status: string;
     penalties?: number;
+    laps?: LapRecord[];
+    participant?: ParticipantSnapshot;
   }[];
 }
 
@@ -84,4 +95,35 @@ export interface DbStatus {
   totalStudents: number;
   totalInQueue: number;
   activeRound: number;
+}
+
+export interface WalkInProfile {
+  id: string;
+  rollNo: string; // Internal compatibility reference, never requested from a guest.
+  participantType: "external";
+  name: string;
+  email: string;
+  phone: string;
+  extras: string;
+  registeredAt: string;
+  updatedAt: string;
+}
+
+export interface LapRecord {
+  lapNumber: number;
+  lapTimeMs: number;
+  elapsedMs: number;
+  completedAt: string;
+  source: "manual" | "tracker";
+  eventId: string;
+}
+export interface ParticipantSnapshot {
+  rollNo: string;
+  name: string;
+  participantType: "student" | "external";
+  email?: string;
+  phone?: string;
+  extras?: string;
+  teamName?: string;
+  department?: string;
 }

@@ -6,7 +6,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:registration": "node tests/registration.mjs",
+    "import:contacts": "node scripts/import-contacts.mjs",
+    "test:walk-ins": "node tests/walk-ins.mjs",
+    "test:laps": "node tests/laps.mjs",
+    "tracker:bridge": "node scripts/tracker-bridge.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -27,4 +32,3 @@
     "typescript": "^5.6.3"
   }
 }
-

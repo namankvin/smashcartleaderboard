@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  moveTrackPlayer,
+  returnAllToQueue,
   vacateArenaSlot,
   assignPlayerToArenaSlot,
   editArenaPlayer,
@@ -20,9 +22,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (action === "move") {
+      const result = await moveTrackPlayer(slot, body.toSlot);
+      return NextResponse.json(result, { status: result.success ? 200 : 400 });
+    }
+    if (action === "return_all") {
+      const result = await returnAllToQueue();
+      return NextResponse.json(result, { status: result.success ? 200 : 400 });
+    }
+
     // 1. Vacate a slot
     if (action === "vacate") {
-      if (!slot || slot < 1 || slot > 3) {
+      if (!Number.isInteger(slot) || slot < 1 || slot > 3) {
         return NextResponse.json(
           { success: false, message: "Valid slot (1, 2, or 3) is required to vacate." },
           { status: 400 }
@@ -38,7 +49,7 @@ export async function POST(request: NextRequest) {
 
     // 2. Assign / Fill a slot by roll number
     if (action === "assign") {
-      if (!slot || slot < 1 || slot > 3 || !rollNo) {
+      if (!Number.isInteger(slot) || slot < 1 || slot > 3 || typeof rollNo !== "string" || !rollNo.trim()) {
         return NextResponse.json(
           { success: false, message: "Slot (1-3) and rollNo are required to assign." },
           { status: 400 }
@@ -50,7 +61,7 @@ export async function POST(request: NextRequest) {
 
     // 3. Edit details of player in slot
     if (action === "edit") {
-      if (!slot || slot < 1 || slot > 3) {
+      if (!Number.isInteger(slot) || slot < 1 || slot > 3) {
         return NextResponse.json(
           { success: false, message: "Slot (1-3) is required to edit." },
           { status: 400 }

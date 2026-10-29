@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Single student
-    const { rollNo, name, teamName, department, year, contact } = body;
+    const { rollNo, name, teamName, department, year, contact, email } = body;
     if (!rollNo || !name) {
       return NextResponse.json(
         { success: false, message: "Both rollNo and name are required." },
@@ -55,7 +55,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const student: Student = { rollNo, name, teamName, department, year, contact };
+    const student: Student = { rollNo, name, teamName, department, year, contact, email };
     const saved = await insertStudent(student);
 
     return NextResponse.json({
