@@ -75,7 +75,7 @@ This is a software adapter, not proof that a coloured blob correctly crossed the
 | `arena_state` | Current race ID, target laps, assignments, timer state and recorded laps |
 | `lap_records` | One immutable record per player's lap, with timestamp, duration and participant snapshot |
 | `race_results` | Per-player current/final results, including all laps, penalties and participant details |
-| `rounds` | Archived rounds used by history and the leaderboard |
+| `rounds` | Archived race history; also supplies older lap records for the leaderboard |
 
 View these under the configured database in Atlas Data Explorer. The current database is `sk-leaderboard`. `lap_records` and `race_results` are saved even if the operator has not archived the round yet. There is no winner-only filtering when saving laps.
 
@@ -154,3 +154,7 @@ Race clocks use saved timestamps; race and lap state loads from MongoDB on every
 This prepares the repository for deployment; it does not create a Vercel project, publish a deployment, or configure organizer authentication. Those require the hosting/account setup described above.
 
 The header reports **Database unavailable** after a failed connection rather than staying on Connecting. Refreshes do not overlap, connection requests have a timeout, and **Retry connection** retries without clearing the last displayed race state. `npm run test:connection-status` checks slow failure and recovery in Chrome against the running preview using intercepted responses; it does not change database records.
+
+### Single-lap leaderboard
+
+Standings rank each participant by their fastest valid completed lap across all attempts. A lap counts immediately after it is saved, including during a running race and when the race is later unfinished, withdrawn, or disqualified. Players without a completed lap are not ranked. The leaderboard combines the durable `lap_records` ledger with older archived round laps, deduplicating by race, participant and lap number. It shows unique completed-lap and race counts; race totals and penalties are not single-lap times. Search preserves overall ranks and the top-three podium.

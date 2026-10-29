@@ -838,69 +838,56 @@ export async function getLeaderboardData(searchRollNo?: string): Promise<{
   allParticipants: LeaderboardEntry[];
 }> {
   const store = getMockStore();
-  let historyRounds = store.history;
-
   const db = await getMongoDb();
-  if (db) {
-    try {
-      const docs = await db.collection<MatchRound>("rounds").find().sort({ completedAt: -1 }).toArray();
-      if (docs.length > 0) {
-        historyRounds = docs;
+  type SavedLap = LapRecord & { raceId: string; rollNo: string; participant?: ParticipantSnapshot };
+  const [historyRounds, savedLaps] = db
+    ? await Promise.all([
+        db.collection<MatchRound>("rounds").find().toArray(),
+        db.collection<SavedLap>("lap_records").find().toArray(),
+      ])
+    : [store.history, [] as SavedLap[]];
+  const participantsMap = new Map<string, Omit<LeaderboardEntry, "rank">>();
+  const seenLaps = new Set<string>();
+  const racesByPlayer = new Map<string, Set<string>>();
+  function addLap(player: { rollNo: string; name: string; teamName?: string }, lap: LapRecord, raceId: string) {
+    if (!player.rollNo || !Number.isFinite(lap.lapTimeMs) || lap.lapTimeMs <= 0) return;
+    const rollNo = player.rollNo.toUpperCase();
+    const key = `${raceId}:${rollNo}:${lap.lapNumber}`;
+    if (seenLaps.has(key)) return;
+    seenLaps.add(key);
+    const races = racesByPlayer.get(rollNo) || new Set<string>();
+    races.add(raceId);
+    racesByPlayer.set(rollNo, races);
+    const existing = participantsMap.get(rollNo);
+    const time = lap.lapTimeMs;
+    const formatted = `${String(Math.floor(time / 60000)).padStart(2, "0")}:${String(Math.floor(time / 1000) % 60).padStart(2, "0")}.${String(time % 1000).padStart(3, "0")}`;
+    if (!existing) {
+      participantsMap.set(rollNo, { rollNo, name: player.name, teamName: player.teamName,
+        bestTimeMs: time, bestTimeFormatted: formatted, roundsPlayed: races.size, lapsCompleted: 1,
+        status: "recorded", penalties: 0, lastPlayedAt: lap.completedAt });
+    } else {
+      existing.lapsCompleted += 1;
+      existing.roundsPlayed = races.size;
+      if (time < existing.bestTimeMs) {
+        existing.bestTimeMs = time;
+        existing.bestTimeFormatted = formatted;
       }
-    } catch (error) {
-      if (isMongoConfigured) throw error;
-      // Use mock store
+      if (lap.completedAt > existing.lastPlayedAt) existing.lastPlayedAt = lap.completedAt;
     }
   }
-
-  // Aggregate by unique student roll number
-  const participantsMap = new Map<
-    string,
-    {
-      rollNo: string;
-      name: string;
-      teamName?: string;
-      department?: string;
-      bestTimeMs: number;
-      bestTimeFormatted: string;
-      roundsPlayed: number;
-      status: string;
-      penalties: number;
-      lastPlayedAt: string;
-    }
-  >();
-
+  // Read the durable lap ledger first: laps count even while a race is running,
+  // withdrawn, or unfinished. Archived rounds cover older data without ledger rows.
+  for (const lap of savedLaps) {
+    addLap({ rollNo: lap.rollNo, name: lap.participant?.name || lap.rollNo, teamName: lap.participant?.teamName }, lap, lap.raceId);
+  }
   for (const round of historyRounds) {
-    for (const p of round.players) {
-      if (!p.rollNo) continue;
-      const cleanRoll = p.rollNo.toUpperCase();
-      const existing = participantsMap.get(cleanRoll);
-
-      if (!existing) {
-        participantsMap.set(cleanRoll, {
-          rollNo: p.rollNo,
-          name: p.name,
-          teamName: p.teamName,
-          bestTimeMs: p.timeMs,
-          bestTimeFormatted: p.timeFormatted,
-          roundsPlayed: 1,
-          status: p.status,
-          penalties: p.penalties || 0,
-          lastPlayedAt: round.completedAt,
-        });
-      } else {
-        existing.roundsPlayed += 1;
-        // Keep fastest (lowest time in ms)
-        if (
-          p.status === "finished" &&
-          (existing.status !== "finished" || p.timeMs < existing.bestTimeMs)
-        ) {
-          existing.bestTimeMs = p.timeMs;
-          existing.bestTimeFormatted = p.timeFormatted;
-          existing.status = p.status;
-          existing.penalties = p.penalties || 0;
-        }
-      }
+    for (const player of round.players) {
+      for (const lap of player.laps || []) addLap(player, lap, round.raceId || round.id);
+    }
+  }
+  if (!db) {
+    for (const player of store.activePlayers) {
+      for (const lap of player.laps || []) addLap(player, lap, store.raceId!);
     }
   }
 
@@ -910,12 +897,9 @@ export async function getLeaderboardData(searchRollNo?: string): Promise<{
     if (entry) entry.name = profile.name;
   }
 
-  // Sort: non-disqualified lowest time first, then disqualified at the bottom
-  const sorted = Array.from(participantsMap.values()).sort((a, b) => {
-    const priority = (status: string) => status === "finished" ? 0 : status === "dnf" ? 1 : 2;
-    if (priority(a.status) !== priority(b.status)) return priority(a.status) - priority(b.status);
-    return a.bestTimeMs - b.bestTimeMs;
-  });
+  const sorted = Array.from(participantsMap.values()).sort((a, b) =>
+    a.bestTimeMs - b.bestTimeMs || a.rollNo.localeCompare(b.rollNo)
+  );
 
   // Assign ranks
   const ranked: LeaderboardEntry[] = sorted.map((entry, index) => ({
@@ -924,7 +908,7 @@ export async function getLeaderboardData(searchRollNo?: string): Promise<{
   }));
 
   const totalParticipantsCount = ranked.length;
-  const topThree = ranked.filter(player => player.status === "finished").slice(0, 3);
+  const topThree = ranked.slice(0, 3);
 
   // Filter if searchRollNo is provided
   let filtered = ranked;

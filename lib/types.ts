@@ -62,6 +62,7 @@ export interface LeaderboardEntry {
   bestTimeMs: number;
   bestTimeFormatted: string;
   roundsPlayed: number;
+  lapsCompleted: number;
   status: string;
   penalties: number;
   lastPlayedAt: string;

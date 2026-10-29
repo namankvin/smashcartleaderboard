@@ -71,10 +71,38 @@ const fifth = worker();
 assert.equal((await fifth.api.getActiveArena()).players[0].status, "finished");
 assert.equal(shared.get("lap_records").length, 1);
 assert.equal(contactReads, 0, "No worker requires the ignored contacts.json file");
+// Leaderboard uses each completed lap immediately, even before race archival.
+let standings = await worker().api.getLeaderboardData();
+assert.equal(standings.totalParticipantsCount, 1);
+assert.equal(standings.topThree[0].rollNo, guest.profile.id);
+const lap = (lapNumber, lapTimeMs) => ({ lapNumber, lapTimeMs, elapsedMs: lapTimeMs, completedAt: "2026-10-30T00:00:00.000Z", source: "manual", eventId: `lap-${lapNumber}` });
+shared.set("lap_records", [
+  { raceId: "unfinished", rollNo: "A", participant: { name: "Unfinished racer" }, ...lap(1, 4291) },
+  { raceId: "unfinished", rollNo: "A", participant: { name: "Unfinished racer" }, ...lap(2, 5000) },
+  { raceId: "finished", rollNo: "B", participant: { name: "Finished racer" }, ...lap(1, 5841) },
+  { raceId: "second-attempt", rollNo: "A", participant: { name: "Unfinished racer" }, ...lap(1, 3900) },
+  { raceId: "invalid", rollNo: "BAD", participant: { name: "Invalid lap" }, ...lap(1, 0) },
+]);
+shared.set("rounds", [
+  { id: "archived", raceId: "unfinished", players: [{ rollNo: "A", name: "Unfinished racer", status: "dnf", timeMs: 999999, laps: [lap(1, 4291), lap(2, 5000)] }] },
+  { id: "old-round", players: [{ rollNo: "C", name: "Older racer", status: "dnf", laps: [lap(1, 7453)] }, { rollNo: "NO-LAP", name: "No completed lap", status: "finished", timeMs: 1000 }] },
+]);
+standings = await worker().api.getLeaderboardData();
+assert.equal(standings.totalParticipantsCount, 3, "Only players with a valid completed lap are ranked");
+assert.equal(standings.allParticipants.map(p => p.rollNo).join(","), "A,B,C", "DNF single lap outranks slower finished racer");
+assert.equal(standings.topThree.length, 3, "Unfinished racers qualify for the podium");
+assert.equal(standings.allParticipants[0].bestTimeMs, 3900);
+assert.equal(standings.allParticipants[0].bestTimeFormatted, "00:03.900");
+assert.equal(standings.allParticipants[0].lapsCompleted, 3, "Archived copies do not double-count laps");
+assert.equal(standings.allParticipants[0].roundsPlayed, 2);
+assert.equal(standings.allParticipants[2].bestTimeMs, 7453, "Older archived laps are included");
+const searched = await worker().api.getLeaderboardData("Older");
+assert.equal(searched.allParticipants[0].rank, 3, "Search preserves overall rank");
+assert.equal(searched.topThree.length, 3, "Search preserves the overall podium");
 const missing = worker({ configured: false });
 await assert.rejects(missing.api.getQueue(), /MONGODB_URI/);
 const reconnect = worker({ failFirst: true });
 await assert.rejects(reconnect.api.getQueue(), /MongoDB is unavailable/);
 await reconnect.api.getQueue();
 assert.equal(reconnect.attempts(), 2, "Failed connection promises are retried by the next request");
-console.log("PASS: independent cold-worker queue/track/lap recovery, no contacts-file dependency, hosted missing-config rejection, bounded connection pooling and retry after a failed connection (simulated MongoDB).");
+console.log("PASS: independent cold-worker queue/track/lap recovery, no contacts-file dependency, hosted missing-config rejection, bounded connection pooling, retry, and best-single-lap standings including unfinished/live races, historical fallback, deduplication and search (simulated MongoDB).");

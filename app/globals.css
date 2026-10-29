@@ -108,3 +108,19 @@ p { line-height: 1.55; }
 .lap-list { margin: 10px 0; padding: 0; list-style: none; font-size: 12px; }
 .lap-list li { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); color: var(--muted); }
 .lap-list strong { color: var(--ink); font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+.leaderboard-podium { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 26px; }
+.podium-gold { --medal: #f3cd70; --medal-tint: #eebd3e12; }
+.podium-silver { --medal: #c8d8eb; --medal-tint: #aec8e512; }
+.podium-bronze { --medal: #e4ab85; --medal-tint: #df905712; }
+.podium-card { border-top: 3px solid var(--medal); background: linear-gradient(135deg, var(--medal-tint), transparent), #151f2d; }
+.podium-place { display: flex; align-items: center; gap: 10px; color: var(--medal); font-size: 13px; font-weight: 700; margin-bottom: 18px; }
+.podium-medal { font-size: 32px; line-height: 1; }
+.podium-card h2 { overflow-wrap: anywhere; }
+.podium-time { color: var(--medal); font-family: ui-monospace, monospace; font-size: clamp(24px, 3vw, 34px); font-weight: 700; font-variant-numeric: tabular-nums; margin: 22px 0 0; }
+.leaderboard-row { background: var(--medal-tint); }
+.leaderboard-row td:first-child { border-left: 3px solid var(--medal); }
+.leaderboard-rank { display: inline-flex; align-items: center; gap: 9px; font-weight: 700; }
+.leaderboard-row .leaderboard-rank, .leaderboard-row .leaderboard-lap { color: var(--medal); }
+.leaderboard-lap { font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; font-weight: 650; white-space: nowrap; }
+@media (max-width: 760px) { .leaderboard-podium { grid-template-columns: 1fr; gap: 12px; } .podium-time { margin-top: 12px; } }
