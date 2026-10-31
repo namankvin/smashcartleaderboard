@@ -5,7 +5,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import vm from "node:vm";
 const require = createRequire(import.meta.url), ts = require("typescript");
 const shared = new Map();
-let sequence = 0, contactReads = 0;
+let sequence = 0, contactReads = 0, failInsertCollection = "";
 const clone = value => value === undefined ? undefined : structuredClone(value);
 function matches(doc, filter = {}) {
   return Object.entries(filter).every(([key, value]) => {
@@ -23,7 +23,7 @@ function collection(name) {
     countDocuments: async filter => rows().filter(row => matches(row, filter)).length,
     findOne: async filter => clone(rows().find(row => matches(row, filter)) || null),
     find(filter = {}) { let limit = Infinity; return { sort() { return this; }, limit(value) { limit = value; return this; }, async toArray() { return clone(rows().filter(row => matches(row, filter)).slice(0, limit)); } }; },
-    async insertOne(doc) { rows().push(clone({ _id: `row-${++sequence}`, ...doc })); return { insertedId: `row-${sequence}` }; },
+    async insertOne(doc) { if (failInsertCollection === name) { failInsertCollection = ""; throw new Error("Simulated write failure"); } rows().push(clone({ _id: `row-${++sequence}`, ...doc })); return { insertedId: `row-${sequence}` }; },
     async updateOne(filter, update, options = {}) { let row = rows().find(row => matches(row, filter)); if (!row && options.upsert) { row = clone({ ...filter, ...update.$setOnInsert }); rows().push(row); } if (row) Object.assign(row, clone(update.$set)); return { modifiedCount: row ? 1 : 0 }; },
     async replaceOne(filter, replacement) { const index = rows().findIndex(row => matches(row, filter)); const row = clone({ ...filter, ...replacement }); if (index >= 0) rows()[index] = row; else rows().push(row); return { modifiedCount: 1 }; },
     async deleteOne(filter) { const index = rows().findIndex(row => matches(row, filter)); if (index >= 0) rows().splice(index, 1); return { deletedCount: index >= 0 ? 1 : 0 }; },
@@ -36,7 +36,10 @@ function worker({ configured = true, failFirst = false } = {}) {
     async connect() { attempts++; if (failFirst && attempts === 1) throw new Error("Temporary failure"); return this; }
     db() { return { collection }; }
     async close() {}
-    async withSession(fn) { return fn({ withTransaction: async callback => callback() }); }
+    async withSession(fn) { return fn({ withTransaction: async callback => {
+      const before = clone([...shared.entries()]);
+      try { return await callback(); } catch (error) { shared.clear(); for (const [key, rows] of before) shared.set(key, rows); throw error; }
+    } }); }
   }
   const storage = new AsyncLocalStorage();
   const dependencies = {
@@ -136,6 +139,43 @@ assert.equal(known.success, true);
 assert.equal(known.item.name, "Known student");
 assert.equal(known.item.registrationSource, "rfid");
 assert.equal(shared.get("students").length, 1, "Guest names never create student rows");
+// Recovery imports source events once, across cold workers and UI removals.
+shared.set("queue", []);
+shared.set("rounds", []);
+shared.set("external_registrations", []);
+shared.get("arena_state")[0].state.activePlayers = [];
+shared.get("students").push({ rollNo: "SHASHANK001", name: "Shashank Student" });
+const rcEntry = (id, rollNumber, registeredAt = "2026-10-31T06:00:00.000Z") => ({ id, rollNumber, name: rollNumber, registeredAt });
+const sourceEntries = [rcEntry("scan-1", "SHASHANK001"), rcEntry("scan-2", "SHASHANK001"), { ...rcEntry("scan-3", "Visitor Name"), name: "Visiting Person", mail: "visitor@example.test" }];
+let recovered = await worker().api.reconcileRCRegistrations(sourceEntries);
+assert.equal(recovered.added, 2);
+assert.equal(shared.get("queue").length, 2, "Duplicate RC entries do not duplicate players");
+assert.equal(shared.get("queue")[0].name, "Shashank Student", "Known rolls retain directory names");
+assert.equal(shared.get("queue")[1].name, "Visiting Person", "External guest names are preserved");
+assert.equal(shared.get("external_registrations").length, 3);
+const importedGuest = shared.get("queue")[1].rollNo;
+assert.equal((await worker().api.getWalkInProfile(importedGuest)).email, "visitor@example.test");
+await worker().api.removeWaitingParticipant(shared.get("queue")[0].id);
+assert.equal((await worker().api.reconcileRCRegistrations(sourceEntries)).handled, 0);
+assert.equal(shared.get("queue").length, 1, "A removed participant is not reimported after a cold start");
+await worker().api.registerEndpointValue("SHASHANK001");
+assert.equal((await worker().api.reconcileRCRegistrations([rcEntry("broadcast-also-received", "SHASHANK001")])).added, 0);
+assert.equal((await worker().api.assignPlayerToArenaSlot(1, "SHASHANK001")).success, true);
+assert.equal((await worker().api.reconcileRCRegistrations([rcEntry("while-seated", "SHASHANK001")])).added, 0);
+shared.get("arena_state")[0].state.activePlayers = [];
+assert.equal((await worker().api.reconcileRCRegistrations([rcEntry("while-seated", "SHASHANK001")])).handled, 0);
+shared.set("rounds", [{ id: "played-rc-round", completedAt: "2026-10-31T07:00:00.000Z", players: [{ rollNo: "SHASHANK001", name: "Shashank Student" }] }]);
+assert.equal((await worker().api.reconcileRCRegistrations([rcEntry("old-completed-entry", "SHASHANK001")])).added, 0, "Older played entries are not queued again");
+assert.equal((await worker().api.reconcileRCRegistrations([rcEntry("new-attempt", "SHASHANK001", "2026-10-31T08:00:00.000Z")])).added, 1, "A new registration after a race can queue again");
+failInsertCollection = "queue";
+const failingEntry = rcEntry("retry-after-write-failure", "Retry Visitor");
+await assert.rejects(worker().api.reconcileRCRegistrations([failingEntry]), /Simulated write failure/);
+assert.equal(shared.get("external_registrations").some(r => r._id === "rc-tz:retry-after-write-failure"), false, "Failed writes never mark an upstream entry as handled");
+assert.equal((await worker().api.reconcileRCRegistrations([failingEntry])).added, 1, "Transient write failures recover on retry");
+const backlog = Array.from({ length: 12 }, (_, i) => rcEntry(`batch-${i}`, `Batch Guest ${i}`));
+for (const remaining of [9, 6, 3, 0]) {
+  assert.equal((await worker().api.reconcileRCRegistrations(backlog)).pending, remaining, "Large backlogs drain in bounded transactions");
+}
 const missing = worker({ configured: false });
 await assert.rejects(missing.api.getQueue(), /MONGODB_URI/);
 const reconnect = worker({ failFirst: true });

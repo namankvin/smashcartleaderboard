@@ -15,7 +15,8 @@
     "test:rfid-contract": "node tests/rfid-contract.mjs",
     "test:vercel": "node tests/vercel-runtime.mjs",
     "test:vercel:smoke": "node tests/vercel-smoke.mjs",
-    "test:connection-status": "node tests/connection-status.mjs"
+    "test:connection-status": "node tests/connection-status.mjs",
+    "test:rc-sync": "node tests/rc-sync.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",

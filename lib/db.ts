@@ -150,7 +150,9 @@ export async function findStudentByRollNo(rollNo: string): Promise<Student | nul
   const db = await getMongoDb();
   if (db) {
     try {
-      const student = await db.collection<Student>("students").findOne({
+      // Normalized rolls use the unique index; retain case-insensitive lookup for older records.
+      const students = db.collection<Student>("students");
+      const student = await students.findOne({ rollNo: cleanRoll }) || await students.findOne({
         rollNo: { $regex: new RegExp(`^${cleanRoll.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
       });
       return student;
@@ -954,6 +956,7 @@ async function ensureArenaIndexes(db: Db) {
     db.collection("lap_records").createIndex({ raceId: 1, rollNo: 1, lapNumber: 1 }, { unique: true }),
     db.collection("race_results").createIndex({ raceId: 1, rollNo: 1 }, { unique: true }),
     db.collection("rfid_cards").createIndex({ uid: 1 }, { unique: true }),
+    db.collection("external_registrations").createIndex({ _id: 1 }),
   ]).catch(error => { globalThis._arenaIndexesReady = undefined; throw error; });
   await globalThis._arenaIndexesReady;
 }
@@ -1059,22 +1062,75 @@ function walkInFields(input: unknown) {
 // Endpoint senders put either a student roll or a guest name in the roll field.
 // A stable ID makes retries reuse the same editable profile, even across workers.
 export function registerEndpointValue(value: string) {
+  return serializeMutation(() => registerEndpointValueUnlocked(value));
+}
+
+function endpointGuestId(value: string) {
+  const identity = value.trim().normalize("NFKC").toLowerCase().replace(/\s+/g, " ");
+  return `GUEST-SCAN-${createHash("sha256").update(identity).digest("hex").toUpperCase()}`;
+}
+
+async function registerEndpointValueUnlocked(value: string, details?: { name?: string; email?: string }, knownStudent?: Student | null) {
+  const name = value.trim();
+  const student = knownStudent === undefined ? await findStudentByRollNo(name) : knownStudent;
+  if (student) return addToQueueByRollNoUnlocked(student.rollNo, undefined, "rfid");
+  const fields = walkInFields({ name: details?.name || name, email: details?.email });
+  const id = endpointGuestId(name);
+  const db = await walkInDatabase();
+  const existing = await getWalkInProfile(id);
+  if (!existing) {
+    const now = new Date().toISOString();
+    const profile: WalkInProfile = { id, rollNo: id, participantType: "external", ...fields, registeredAt: now, updatedAt: now };
+    if (db) await db.collection("walk_ins").insertOne(profile);
+    else localWalkIns().set(id, profile);
+  }
+  return addToQueueByRollNoUnlocked(id, undefined, "walk-in");
+}
+
+export interface RCRegistration {
+  id: string;
+  rollNumber: string;
+  name?: string;
+  mail?: string;
+  registeredAt: string;
+}
+
+// Reconcile each upstream event once. The receipt and queue insertion commit
+// together; removing a player or finishing a race cannot replay an old RC entry.
+export async function reconcileRCRegistrations(entries: RCRegistration[]) {
+  const db = await walkInDatabase();
+  if (!db) throw new Error("MongoDB is required to synchronize RC registrations.");
+  const receiptId = (entry: RCRegistration) => `rc-tz:${entry.id}`;
+  const receipts = db.collection<{ _id: string; rollNo: string; outcome: string; handledAt: string }>("external_registrations");
+  const seen = new Set((await receipts.find({ _id: { $in: entries.map(receiptId) } }).toArray()).map(row => row._id));
+  const pending = entries.filter(entry => !seen.has(receiptId(entry)));
+  if (!pending.length) return { added: 0, handled: 0, pending: 0 };
+  // Bound transaction time; subsequent queue refreshes drain any larger backlog.
+  const batch = pending.slice(0, 3);
   return serializeMutation(async () => {
-    const name = value.trim();
-    const student = await findStudentByRollNo(name);
-    if (student) return addToQueueByRollNoUnlocked(student.rollNo, undefined, "rfid");
-    const fields = walkInFields({ name });
-    const identity = name.normalize("NFKC").toLowerCase().replace(/\s+/g, " ");
-    const id = `GUEST-SCAN-${createHash("sha256").update(identity).digest("hex").toUpperCase()}`;
-    const db = await walkInDatabase();
-    const existing = await getWalkInProfile(id);
-    if (!existing) {
-      const now = new Date().toISOString();
-      const profile: WalkInProfile = { id, rollNo: id, participantType: "external", ...fields, registeredAt: now, updatedAt: now };
-      if (db) await db.collection("walk_ins").insertOne(profile);
-      else localWalkIns().set(id, profile);
+    const currentDb = (await walkInDatabase())!;
+    const ledger = currentDb.collection<{ _id: string; rollNo: string; outcome: string; handledAt: string }>("external_registrations");
+    const history = await currentDb.collection<MatchRound>("rounds").find().toArray();
+    let added = 0, handled = 0;
+    for (const entry of batch) {
+      if (await ledger.findOne({ _id: receiptId(entry) })) continue;
+      const student = await findStudentByRollNo(entry.rollNumber);
+      const rollNo = student?.rollNo || endpointGuestId(entry.rollNumber);
+      const alreadyPlayed = history.some(round => Date.parse(round.completedAt) >= Date.parse(entry.registeredAt) &&
+        round.players.some(player => player.rollNo.toUpperCase() === rollNo.toUpperCase()));
+      let outcome = "already-played";
+      if (!alreadyPlayed) {
+        const result = await registerEndpointValueUnlocked(entry.rollNumber, {
+          name: entry.name && !/^(Student|Player)\s*\(/i.test(entry.name) ? entry.name : undefined,
+          email: entry.mail,
+        }, student);
+        if (result.success) { added++; outcome = "queued"; }
+        else outcome = result.isBarred ? "barred" : "already-present";
+      }
+      await ledger.insertOne({ _id: receiptId(entry), rollNo, outcome, handledAt: new Date().toISOString() });
+      handled++;
     }
-    return addToQueueByRollNoUnlocked(id, undefined, "walk-in");
+    return { added, handled, pending: Math.max(0, pending.length - batch.length) };
   });
 }
 

@@ -71,6 +71,7 @@ This is a software adapter, not proof that a coloured blob correctly crossed the
 | `students` | Imported student directory, unique roll numbers |
 | `walk_ins` | Editable visitor profiles |
 | `rfid_cards` | Unique card UID → student roll pairing |
+| `external_registrations` | Durable receipts preventing replay of recovered RC registrations |
 | `queue` | Waiting registrations and original check-in times |
 | `arena_state` | Current race ID, target laps, assignments, timer state and recorded laps |
 | `lap_records` | One immutable record per player's lap, with timestamp, duration and participant snapshot |
@@ -160,3 +161,11 @@ The header reports **Database unavailable** after a failed connection rather tha
 ### Single-lap leaderboard
 
 Standings rank each participant by their fastest valid completed lap across all attempts. A lap counts immediately after it is saved, including during a running race and when the race is later unfinished, withdrawn, or disqualified. Players without a completed lap are not ranked. The leaderboard combines the durable `lap_records` ledger with older archived round laps, deduplicating by race, participant and lap number. It shows unique completed-lap and race counts; race totals and penalties are not single-lap times. Search preserves overall ranks and the top-three podium.
+
+### Recovery from missed RC registrations
+
+While the hosted race control page is open, a separate recovery request reconciles `https://rc-tz-26.vercel.app/api/waiting-list`. This recovers registrations that were saved on RC but never forwarded to SmashKart. Each source entry ID is recorded in `external_registrations` in the same MongoDB transaction as its queue insertion. Duplicate broadcasts, repeated refreshes, and server restarts do not duplicate players; removing someone or completing a race does not replay handled source entries. Older source entries already represented in archived race history are marked handled without requeueing. A newly registered attempt after that race may join normally.
+
+Existing student rolls use the student directory. Unknown source rolls create editable walk-ins using the RC name where available. The existing queue order stays intact; recovered players are appended in upstream registration order, in batches of three. RC timestamps and email details are read only; RC records are never modified.
+
+Recovery runs through `POST /api/registrations/sync` every ten seconds while the race control page is open, with no overlapping recovery requests per client and a five-second per-worker source throttle. Normal `/api/queue` reads never wait on recovery. It does not run as a background job while no client polls. Source failures leave the SmashKart queue available and display a retry notice. The sync response includes a non-secret `registrationSync` status for diagnostics. Set `RC_REGISTRATION_SYNC=false` to disable; local development is disabled by default and can opt in with `RC_REGISTRATION_SYNC=true`. Clearing race/queue data should preserve `external_registrations` unless intentionally replaying source registrations.
