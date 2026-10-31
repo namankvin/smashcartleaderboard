@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { addToQueueByRollNo, getQueue, resolveRFIDCard, findStudentByRollNo } from "./db";
+import { addToQueueByRollNo, getQueue, resolveRFIDCard, findStudentByRollNo, registerEndpointValue } from "./db";
 
 const headers = {
   "Access-Control-Allow-Origin": "*",
@@ -35,8 +35,10 @@ export async function handleRFIDScan(request: NextRequest, requireApiKey = true)
   const fields = ["rollNumber", "rollNo", "roll_no", "rfid", "uid"];
   if (fields.some(field => body[field] !== undefined && (typeof body[field] !== "string" || !body[field].trim()))) return reply({ success: false, message: "Registration identifiers must be non-empty text." }, 400);
   if (!fields.some(field => body[field] !== undefined)) return reply({ success: false, message: "Provide rollNumber, rollNo, rfid or uid." }, 400);
+  const receivedRoll = body.rollNumber || body.rollNo || body.roll_no;
+  if (receivedRoll && receivedRoll.trim().length > 250) return reply({ success: false, message: "Roll number or guest name must be at most 250 characters." }, 400);
   try {
-    let rollNo = body.rollNumber || body.rollNo || body.roll_no;
+    let rollNo = receivedRoll;
     if (!rollNo && body.uid) rollNo = await resolveRFIDCard(body.uid);
     if (!rollNo && body.rfid) {
       // Some readers send the resolved student roll in `rfid`; others send the UID.
@@ -44,7 +46,7 @@ export async function handleRFIDScan(request: NextRequest, requireApiKey = true)
       if (!rollNo) rollNo = (await findStudentByRollNo(body.rfid))?.rollNo;
     }
     if (!rollNo) return reply({ success: false, message: "Unknown card. Pair its UID with a student roll number in RFID setup, or send a resolved rollNumber." }, 422);
-    const result = await addToQueueByRollNo(rollNo, undefined, "rfid");
+    const result = receivedRoll ? await registerEndpointValue(receivedRoll) : await addToQueueByRollNo(rollNo, undefined, "rfid");
     const queue = await getQueue();
     const position = result.item ? queue.findIndex(item => item.id === result.item!.id) + 1 : 0;
     return reply({ ...result, queuePosition: position || null, totalInQueue: queue.length, student: result.item ? { rollNo: result.item.rollNo, name: result.item.name, teamName: result.item.teamName, department: result.item.department } : undefined }, result.success ? 201 : 409);

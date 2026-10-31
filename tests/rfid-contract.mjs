@@ -14,6 +14,13 @@ const db = {
   resolveRFIDCard: async uid => { if (offline) throw new Error("Unavailable"); return uid.trim().toUpperCase() === "CARD001" ? student.rollNo : null; },
   findStudentByRollNo: async roll => roll.trim().toUpperCase() === student.rollNo ? student : null,
   getQueue: async () => queue,
+  registerEndpointValue: async value => {
+    if (offline) throw new Error("Unavailable");
+    if (value.trim().toUpperCase() === student.rollNo) return db.addToQueueByRollNo(value, undefined, "rfid");
+    if (queue.some(item => item.name.toLowerCase() === value.trim().toLowerCase())) return { success: false, item: queue[0], message: "Already waiting." };
+    const item = { rollNo: "GUEST-test", name: value.trim(), id: "guest-registration", registrationSource: "walk-in" };
+    queue.push(item); return { success: true, item, message: "Guest registered." };
+  },
   addToQueueByRollNo: async (roll, _name, source) => {
     if (offline) throw new Error("Unavailable");
     if (roll.trim().toUpperCase() !== student.rollNo) return { success: false, message: "Unknown student." };
@@ -38,9 +45,21 @@ for (const route of [primary, fallback]) {
   assert.equal((await route.POST(req({ rollNumber: "SCAN001" }, ""))).status, 401);
   assert.equal((await route.POST(req({ rollNumber: "SCAN001" }, "wrong"))).status, 401);
   assert.equal((await route.POST(req({ rollNumber: "SCAN001" }, "", { authorization: "Bearer contract-test-token" }))).status, 401);
-  for (const payload of [null, [], {}, { rollNumber: 42 }, { rollNo: " " }]) assert.equal((await route.POST(req(payload))).status, 400);
+  for (const payload of [null, [], {}, { rollNumber: 42 }, { rollNo: " " }, { rollNumber: "a".repeat(251) }]) assert.equal((await route.POST(req(payload))).status, 400);
   assert.equal((await route.POST(new NextRequest("http://test.local", { method: "POST", headers: { "x-api-key": key }, body: "{" }))).status, 400);
   assert.equal((await route.POST(req({ uid: "UNPAIRED" }))).status, 422);
+  assert.equal((await route.POST(req({ rfid: "Unpaired guest name" }))).status, 422);
+  for (const field of ["rollNumber", "rollNo", "roll_no"]) {
+    queue = [];
+    const guest = await route.POST(req({ [field]: " Rahul Sharma " }));
+    assert.equal(guest.status, 201);
+    const data = await guest.json();
+    assert.equal(data.student.name, "Rahul Sharma");
+    assert.equal(data.item.registrationSource, "walk-in");
+    assert.equal(data.queuePosition, 1);
+    assert.equal((await fallback.POST(req({ rollNumber: "rahul sharma" }))).status, 409);
+    assert.equal(queue.length, 1);
+  }
   assert.equal((await route.OPTIONS()).status, 204);
   assert.ok((await route.OPTIONS()).headers.get("access-control-allow-headers").includes("x-api-key"));
   assert.ok(!JSON.stringify(await (await route.GET()).json()).includes(key));

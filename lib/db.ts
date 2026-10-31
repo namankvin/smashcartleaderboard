@@ -1,6 +1,6 @@
 import { arenaTransaction, databaseInTransaction } from "./mongoSession";
 import { LapRecord, ParticipantSnapshot } from "./types";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { WalkInProfile } from "./types";
 import { MongoClient, Db } from "mongodb";
 import { Student, QueueItem, ActivePlayer, MatchRound, DbStatus, WithdrawnRecord, LeaderboardEntry } from "./types";
@@ -1054,6 +1054,28 @@ function walkInFields(input: unknown) {
   }
   if (!fields.name) throw new Error("Name is required.");
   return fields;
+}
+
+// Endpoint senders put either a student roll or a guest name in the roll field.
+// A stable ID makes retries reuse the same editable profile, even across workers.
+export function registerEndpointValue(value: string) {
+  return serializeMutation(async () => {
+    const name = value.trim();
+    const student = await findStudentByRollNo(name);
+    if (student) return addToQueueByRollNoUnlocked(student.rollNo, undefined, "rfid");
+    const fields = walkInFields({ name });
+    const identity = name.normalize("NFKC").toLowerCase().replace(/\s+/g, " ");
+    const id = `GUEST-SCAN-${createHash("sha256").update(identity).digest("hex").toUpperCase()}`;
+    const db = await walkInDatabase();
+    const existing = await getWalkInProfile(id);
+    if (!existing) {
+      const now = new Date().toISOString();
+      const profile: WalkInProfile = { id, rollNo: id, participantType: "external", ...fields, registeredAt: now, updatedAt: now };
+      if (db) await db.collection("walk_ins").insertOne(profile);
+      else localWalkIns().set(id, profile);
+    }
+    return addToQueueByRollNoUnlocked(id, undefined, "walk-in");
+  });
 }
 
 export function createWalkIn(input: unknown) {
